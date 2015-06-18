@@ -12,28 +12,19 @@
 
   enum BUILTIN_TYPE
   {
-      /* UNSIGNED_CHAR, */
-      /* SIGNED_CHAR, */
-      /* INT, */
-      /* UNSIGNED_INT, */
-      /* LONG_INT, */
-      /* DOUBLE, */
-      /* FLOAT, */
-      /* LONG_DOUBLE, */
-      /* CHAR, */
-      BYTE,
-      SHORTINT,
-      INTEGER,
-      WORD,
-      LONGINT,
-      REAL,
-      SINGLE,
-      DOUBLE,
-      EXTENDED,
-      COMP,
-      CHAR,
-      RECORD,
-      WRONG_TYPE
+      BYTE = 1,
+      SHORTINT = 2,
+      INTEGER = 3,
+      WORD = 4,
+      LONGINT = 5,
+      REAL = 6,
+      SINGLE = 7,
+      DOUBLE = 8,
+      EXTENDED = 9,
+      COMP = 10,
+      CHAR = 11,
+      RECORD = 12,
+      WRONG_TYPE = 13
   };
   typedef enum BUILTIN_TYPE BUILTIN_TYPE;
 
@@ -49,7 +40,7 @@
   {
       int size;
       int count;
-      struct VarList *vars;
+      struct VarList *varlists;
   };
   typedef struct Record Record;
   
@@ -64,7 +55,7 @@
   {
       int size;
       int count;
-      BUILTIN_TYPE type;
+      Type *type;
       char **varnames;
   };
   typedef struct VarList VarList;
@@ -79,7 +70,7 @@
   struct SymbolEntry
   {
       char *name;
-      BUILTIN_TYPE type;
+      Type *type;
   };
   typedef struct SymbolEntry SymbolEntry;
 
@@ -114,25 +105,33 @@
   };
   typedef struct ArgumentList ArgumentList;
 
+  struct Literal
+  {
+      yytokentype type;
+      char *value;
+  };
+  typedef struct Literal Literal;
   
 
   void add_var(VarList **varsptr, char *varname);
   void add_arg(ArgumentList **arglistptr, Argument *arg);
+  void add_fields(Record **recordptr, VarList *fields);
   void print_vars(VarList *vars);
   void clear_vars(VarList **varsptr);
   void clear_args(ArgumentList **arglistptr);
   BUILTIN_TYPE type_parse(char *pascal_type);
   char *get_c_type(BUILTIN_TYPE type);
-  char *add_vars_to_globals(VarList *vars, BUILTIN_TYPE type);
+  char *add_vars_to_globals(VarList *vars, Type *type);
   char *string_toupper(char *string);
-  BUILTIN_TYPE get_var_type(char *name);
-  BUILTIN_TYPE process_var_decl(VarList *vars, char *typename);
+  Type *get_var_type(char *name);
+  void process_var_decl(VarList *vars, Type *type);
   void check_int_const(BUILTIN_TYPE type, char *value);
   void check_char_const(BUILTIN_TYPE type, char *value);
   void check_real_const(BUILTIN_TYPE type, char *value);
   void print_const(SymbolEntry *symbol, char *value);
   void print_var_arg(char *name, VarOpt *vo, int if_scanf);
   void print_funcall(char *funcname, ArgumentList *arglist);
+  void print_type(Type *type);
 
   SymbolTable GlobalSymbolTable;
 
@@ -145,16 +144,20 @@
     struct VarOpt *varopt;
     struct Argument *argument;
     struct ArgumentList *arglist;
+    struct Type *type;
+    struct Record *record;
     int ival;
 }
 %token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD WRITE_FUNC WRITELN_FUNC READ_FUNC
 %token <text> IDENT INT_CONST CHAR_CONST REAL_CONST STRING_LITERAL
 %type <text> expression
 %type <argument> arg var_arg
-%type <vars> var_list var_decl
+%type <vars> var_list var_decl field_decl
 %type <arglist> arg_list
 %type <symbol> constant
 %type <varopt> var_options
+%type <type> type_rule
+%type <record> record_body
 %%
 
 Input : prog_header { printf("#include <stdio.h>\n"); }
@@ -175,7 +178,6 @@ statement : func_call
 expression : IDENT { $$ = strdup(string_toupper($1)); }
            | INT_CONST { $$ = strdup($1); }
            | REAL_CONST { $$ = strdup($1); }
-           | CHAR_CONST { $$ = strdup($1); }
            | '(' expression ')' { char *s = NULL; asprintf(&s, "(%s)", $2); free($2); $$ = s; }
            | expression '*' expression {
                char *s = NULL;
@@ -235,7 +237,12 @@ expression : IDENT { $$ = strdup(string_toupper($1)); }
              }
            ;
 
-func_call : IDENT '(' arg_list ')' ';' { print_funcall($1, $3); clear_args(&($3)); free($1); }
+func_call : IDENT '(' arg_list ')' ';'
+            {
+                print_funcall($1, $3);
+                clear_args(&($3));
+                free($1);
+            }
           ;
 
 arg_list : arg { $$ = NULL; add_arg(&($$), $1); free($1); }
@@ -253,6 +260,11 @@ arg : STRING_LITERAL {
 
 var_arg : IDENT var_options
                    {
+                       if (! get_var_type($1))
+                       {
+                           printf("identifier %s ", $1);
+                           yyerror("not found");
+                       }
                        $$ = (Argument *)malloc(sizeof(Argument));
                        $$->varname = $1;
                        $$->string = NULL;
@@ -285,21 +297,46 @@ global_vars : KWD_VAR var_decl_list
             ;
 
 var_decl_list : var_decl
-| var_decl_list var_decl
-;
+              | var_decl_list var_decl
+              ;
 
-var_decl : var_list ':' IDENT
+record_body : field_decl  ';' {
+                   $$ = NULL;
+                   add_fields(&($$), $1);
+              }
+            | record_body
+              field_decl ';' { add_fields(&($1), $2); $$ = $1; }
+            ;
+
+field_decl : var_list ':' IDENT
+             {
+                 Type *type = (Type *)malloc(sizeof(Type));
+                 type->type = type_parse($3);
+                 $1->type = type;
+                 $$ = $1;
+             }
+           ;
+
+type_rule : IDENT
+                {
+                    $$ = (Type *)malloc(sizeof(Type));
+                    $$->type = type_parse($1);
+                }
+          | KWD_RECORD record_body 
+            KWD_END {
+              $$ = (Type *)malloc(sizeof(Type));
+              $$->type = RECORD;
+              memcpy(&($$->record), $2, sizeof(Record));
+            }
+          ;
+
+var_decl : var_list ':' type_rule ';'
            {
-               
-BUILTIN_TYPE type = process_var_decl($1, $3);
-               if (type != WRONG_TYPE)
-               {
-                   printf("%s ", get_c_type(type));
-                   print_vars($1);
-                   printf(";\n");
-               }
+               process_var_decl($1, $3);
+               $1->type = $3;
+               print_vars($1);
+               clear_vars(&($1));
            }
-           ';' { clear_vars(&($1)); }
          ;
 
 var_list : IDENT { $$ = NULL; add_var(&($$), $1);  }
@@ -313,24 +350,48 @@ const_decls : const_decl
             | const_decls const_decl
             ;
 
-const_decl : constant '=' CHAR_CONST
-             { check_char_const($1->type, $3); print_const($1, $3); } ';'
-           | constant '=' INT_CONST
-             { check_int_const($1->type, $3); print_const($1, $3); } ';'
-           | constant '=' REAL_CONST
-             { check_real_const($1->type, $3); print_const($1, $3); } ';'
+const_record_field : IDENT ':' 
+                   ;
+
+const_record_fields :
+                    ;
+
+const_record : '(' const_record_fields ')'
+             ;
+
+literal : CHAR_CONST {
+               $$ = (Literal *)malloc(sizeof(Literal));
+               $$->type = CHAR_CONST;
+               $$->value = $1;
+           }
+        | INT_CONST  {
+            $$ = (Literal *)malloc(sizeof(Literal));
+            $$->type = INT_CONST;
+            $$->value = $1;
+          }
+        | REAL_CONST {
+            $$ = (Literal *)malloc(sizeof(Literal));
+            $$->type = REAL_CONST;
+            $$->value = $1;
+          }
+        ;
+
+const_value : literal
+
+const_decl : constant '=' literal
+             { check_const($1->type->type, $3); print_const($1, $3); } ';'
+           | constant '=' const_record ';'
            ;
 
-constant : IDENT ':' IDENT
+constant : IDENT ':' type_rule
              {
-                 BUILTIN_TYPE type;
                  VarList var;
                  SymbolEntry *symbol = (SymbolEntry *)malloc(sizeof(SymbolEntry));
                  var.count = 1;
                  var.varnames = &($1);
-                 type = process_var_decl(&var, $3);
+                 process_var_decl(&var, $3);
                  symbol->name = string_toupper($1);
-                 symbol->type = type;
+                 symbol->type = $3;
                  $$ = symbol;
              }
            ;
@@ -350,28 +411,16 @@ char *string_toupper(char *string)
     return string;
 }
 
-BUILTIN_TYPE process_var_decl(VarList *vars, char *typename)
+void process_var_decl(VarList *vars, Type *type)
 {
-    BUILTIN_TYPE type;
-    type = type_parse(typename);
-    if (type != WRONG_TYPE)
+    char *varname;
+    varname = add_vars_to_globals(vars, type);
+    if (varname != NULL)
     {
-        char *varname;
-        varname = add_vars_to_globals(vars, type);
-        if (varname != NULL)
-        {
-            printf("identifier %s ", varname);
-            yyerror("redeclared");
-        }
+        printf("identifier %s ", varname);
+        yyerror("redeclared");
     }
-    else
-    {
-        yyerror("type identifier expected");
-    }
-    return type;
 }
-
-
 
 
 int int_in_bounds(char *value, long int low, long int high)
@@ -411,7 +460,7 @@ void check_int_const(BUILTIN_TYPE type, char *value)
                 return;
             break;
         case COMP:
-            if (int_in_bounds(value, -9223372036854775808, 9223372036854775807))
+            if (float_in_bounds(value, "-9223372036854775808", "9223372036854775807"))
                 return;
             break;
         default:
@@ -543,6 +592,8 @@ int float_in_bounds(char *number, char *low, char *high)
     return 1;
 }
 
+void check_const()
+
 void check_real_const(BUILTIN_TYPE type, char *value)
 {
     switch (type)
@@ -640,29 +691,49 @@ void add_fields(Record **recordptr, VarList *fields)
         *recordptr = (Record *)malloc(sizeof(Record));
         (*recordptr)->size = 8;
         (*recordptr)->count = 0;
-        (*recordptr)->vars = (VarList *)malloc(sizeof(VarList) * (*recordptr)->size);
+        (*recordptr)->varlists = (VarList *)malloc(sizeof(VarList) * (*recordptr)->size);
     }
     if ((*recordptr)->count == (*recordptr)->size)
     {
         (*recordptr)->size += 8;
-        (*recordptr)->vars = (VarList *)realloc((*recordptr)->vars,
-                                                sizeof(VarList) * (*recordptr)->size);
+        (*recordptr)->varlists = (VarList *)realloc((*recordptr)->varlists,
+                                                    sizeof(VarList) * (*recordptr)->size);
     }
-    /* (*recordptr)->vars[(*recordptr)->count] = fields; */
+    memcpy(&((*recordptr)->varlists[(*recordptr)->count]), fields, sizeof(VarList));
     (*recordptr)->count++;
+}
+
+void print_type(Type *type)
+{
+    if (type->type != RECORD)
+        printf("%s", get_c_type(type->type));
+    else
+    {
+        int i;
+        printf("struct\n{\n");
+        for (i = 0; i < type->record.count; i++)
+        {
+            printf("  ");
+            print_vars(&(type->record.varlists[i]));
+        }
+        printf("}");
+    }
 }
 
 void print_const(SymbolEntry *symbol, char *value)
 {
-    printf("%s %s = %s;\n", get_c_type(symbol->type), symbol->name, value);
+    print_type(symbol->type);
+    printf(" %s = %s;\n", symbol->name, value);
 }
 
 void print_vars(VarList *vars)
 {
     int i;
+    print_type(vars->type);
+    putchar(' ');
     for (i = 0; i < vars->count - 1; i++)
         printf("%s, ", string_toupper(vars->varnames[i]));
-    printf("%s", string_toupper(vars->varnames[i]));
+    printf("%s;\n", string_toupper(vars->varnames[i]));
 }
 
 void print_funcall(char *funcname, ArgumentList *arglist)
@@ -731,7 +802,7 @@ void clear_args(ArgumentList **arglistptr)
     *arglistptr = NULL;
 }
 
-void add_global_symbol(char *name, BUILTIN_TYPE type)
+void add_global_symbol(char *name, Type *type)
 {
     if (! GlobalSymbolTable.entries)
     {
@@ -751,43 +822,43 @@ void add_global_symbol(char *name, BUILTIN_TYPE type)
     GlobalSymbolTable.count++;
 }
 
-char *add_vars_to_globals(VarList *vars, BUILTIN_TYPE type)
+char *add_vars_to_globals(VarList *vars, Type *type)
 {
     int i;
     for (i = 0; i < vars->count; i++)
-        if (get_var_type(vars->varnames[i]) != WRONG_TYPE)
+        if (get_var_type(vars->varnames[i]) != NULL)
             return vars->varnames[i];
         else
             add_global_symbol(vars->varnames[i], type);
     return NULL;
 }
 
-BUILTIN_TYPE get_var_type(char *name)
+Type *get_var_type(char *name)
 {
     int i;
     for (i = 0; i < GlobalSymbolTable.count; i++)
         if (strcasecmp(name, GlobalSymbolTable.entries[i].name) == 0)
             return GlobalSymbolTable.entries[i].type;
-    return WRONG_TYPE;
+    return NULL;
 }
 
 BUILTIN_TYPE type_parse(char *pascal_type)
 {
-    if (get_var_type(pascal_type) != WRONG_TYPE) /* symbol with name typename was found */
+    if (get_var_type(pascal_type) != NULL) /* symbol with name typename was found */
     {
         yyerror("type identifier expected");
     }
-    if (strcasecmp("BYTE", pascal_type) == 0) return BYTE;
+    if (strcasecmp("BYTE", pascal_type) == 0)     return BYTE;
     if (strcasecmp("SHORTINT", pascal_type) == 0) return SHORTINT;
-    if (strcasecmp("INTEGER", pascal_type) == 0) return INTEGER;
-    if (strcasecmp("WORD", pascal_type) == 0) return WORD;
-    if (strcasecmp("LONGINT", pascal_type) == 0) return LONGINT;
-    if (strcasecmp("REAL", pascal_type) == 0) return REAL;
-    if (strcasecmp("SINGLE", pascal_type) == 0) return SINGLE;
-    if (strcasecmp("DOUBLE", pascal_type) == 0) return DOUBLE;
+    if (strcasecmp("INTEGER", pascal_type) == 0)  return INTEGER;
+    if (strcasecmp("WORD", pascal_type) == 0)     return WORD;
+    if (strcasecmp("LONGINT", pascal_type) == 0)  return LONGINT;
+    if (strcasecmp("REAL", pascal_type) == 0)     return REAL;
+    if (strcasecmp("SINGLE", pascal_type) == 0)   return SINGLE;
+    if (strcasecmp("DOUBLE", pascal_type) == 0)   return DOUBLE;
     if (strcasecmp("EXTENDED", pascal_type) == 0) return EXTENDED;
-    if (strcasecmp("COMP", pascal_type) == 0) return COMP;
-    if (strcasecmp("CHAR", pascal_type) == 0) return CHAR;
+    if (strcasecmp("COMP", pascal_type) == 0)     return COMP;
+    if (strcasecmp("CHAR", pascal_type) == 0)     return CHAR;
     return WRONG_TYPE;
 }
 
@@ -822,7 +893,7 @@ void print_var_arg(char *name, VarOpt *vo, int if_scanf)
     printf("%%");
     if (vo)
         printf("%d.%d", vo->len, vo->precision);
-    switch (get_var_type(name))
+    switch (get_var_type(name)->type)
     {
         case CHAR:
             printf("c");

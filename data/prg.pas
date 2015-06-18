@@ -7,9 +7,8 @@ var rlez    : integer;
 const er   :   char    = '4';
       eeee :   real    = 4;
       q    :   integer = 88;
-   ttt :       comp    = -922337203685477580;
+   ttt :       comp    = 9223372036854775807;
 
 beGIN
-   writeln('q = ', er, eeee);
-   re := r * (8 - 99 shl (re + 81)) - 82;
+   writeln('q = ', er, q);
 END . 
