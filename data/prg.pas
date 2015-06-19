@@ -1,14 +1,18 @@
 progRam lepecbeke;
-var rlez    : integer;
-   rgDDty   : shortint;
-   lepe, ki : reAL;
-   uuu      : char;
 
-const er   :   char    = '4';
-      eeee :   real    = 4;
-      q    :   integer = 88;
-   ttt :       comp    = 9223372036854775807;
+var er, q : integer;
+
+var ss : record
+   x, y : integer;
+   r    :  real;
+end;
+
+const l : record
+   f  : real;
+   cc :  char;
+end =  5;
 
 beGIN
+   r := r * 8;
    writeln('q = ', er, q);
 END . 

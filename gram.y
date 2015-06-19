@@ -33,107 +33,102 @@
       TYPE_ERROR_OUTRANGE,
       TYPE_ERROR_INCOMPATIBLE
   };
+  
 
   struct VarList;
 
-  struct Record
+  typedef struct List
   {
       int size;
       int count;
-      struct VarList *varlists;
-  };
-  typedef struct Record Record;
-  
-  struct Type
+      void **elements;
+  } List;
+
+  typedef struct Type
   {
       BUILTIN_TYPE type;
-      Record record;
-  };
-  typedef struct Type Type;
+      List *record;
+  } Type;
 
-  struct VarList
+  typedef struct VarList
   {
-      int size;
-      int count;
       Type *type;
-      char **varnames;
-  };
-  typedef struct VarList VarList;
+      List *vars;
+  } VarList;
 
-  struct Variable
+  typedef struct Variable
   {
       char *name;
       char *type;
-  };
-  typedef struct Variable Variable;
+  } Variable;
 
-  struct SymbolEntry
+  typedef struct SymbolEntry
   {
       char *name;
       Type *type;
-  };
-  typedef struct SymbolEntry SymbolEntry;
+  } SymbolEntry;
 
-  struct SymbolTable
+  typedef struct SymbolTable
   {
       SymbolEntry *entries;
       int size;
       int count;
-  };
-  typedef struct SymbolTable SymbolTable;
+  } SymbolTable;
 
-  struct VarOpt
+  typedef struct VarOpt
   {
-      int len;
-      int precision;
-  };
-  typedef struct VarOpt VarOpt;
+      char *len;
+      char *precision;
+  } VarOpt;
 
-  struct Argument
+  typedef struct Argument
   {
       char *string;
       char *varname;
       VarOpt *opt;
-  };
-  typedef struct Argument Argument;
+  } Argument;
 
-  struct ArgumentList
+  typedef struct ConstExpr
   {
-      int count;
-      int size;
-      Argument *args;
-  };
-  typedef struct ArgumentList ArgumentList;
+      int type;
+      union
+      {
+          char *string;
+          List *record;
+      } value;
+  } ConstExpr;
 
-  struct Literal
+  typedef struct ConstField
   {
-      yytokentype type;
-      char *value;
-  };
-  typedef struct Literal Literal;
-  
+      char *name;
+      ConstExpr *value;
+  } ConstField;
 
+
+  void add_to_list(List **listptr, void *element);
   void add_var(VarList **varsptr, char *varname);
-  void add_arg(ArgumentList **arglistptr, Argument *arg);
-  void add_fields(Record **recordptr, VarList *fields);
+  /* void add_fields(Record **recordptr, VarList *fields); */
   void print_vars(VarList *vars);
   void clear_vars(VarList **varsptr);
-  void clear_args(ArgumentList **arglistptr);
+  void clear_args(List **arglistptr);
   BUILTIN_TYPE type_parse(char *pascal_type);
   char *get_c_type(BUILTIN_TYPE type);
-  char *add_vars_to_globals(VarList *vars, Type *type);
+  void add_vars_to_globals(VarList *vars, Type *type);
+  void add_global_symbol(char *name, Type *type);
   char *string_toupper(char *string);
   Type *get_var_type(char *name);
-  void process_var_decl(VarList *vars, Type *type);
+  Type *get_field_type(char *name, List *record);
+  void check_const(Type *type, ConstExpr *expr);
   void check_int_const(BUILTIN_TYPE type, char *value);
   void check_char_const(BUILTIN_TYPE type, char *value);
   void check_real_const(BUILTIN_TYPE type, char *value);
-  void print_const(SymbolEntry *symbol, char *value);
+  void check_record_const(Type *type, ConstExpr *expr);
+  void print_const(SymbolEntry *symbol, ConstExpr *expr);
   void print_var_arg(char *name, VarOpt *vo, int if_scanf);
-  void print_funcall(char *funcname, ArgumentList *arglist);
+  void print_funcall(char *funcname, List *arglist);
   void print_type(Type *type);
 
-  SymbolTable GlobalSymbolTable;
+  List GlobalSymbolTable;
 
 %}
 %union
@@ -143,9 +138,11 @@
     struct SymbolEntry *symbol;
     struct VarOpt *varopt;
     struct Argument *argument;
-    struct ArgumentList *arglist;
+    struct List *list;
     struct Type *type;
-    struct Record *record;
+    /* struct Record *record; */
+    struct ConstExpr *const_expr;
+    struct ConstField *const_field;
     int ival;
 }
 %token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD WRITE_FUNC WRITELN_FUNC READ_FUNC
@@ -153,11 +150,13 @@
 %type <text> expression
 %type <argument> arg var_arg
 %type <vars> var_list var_decl field_decl
-%type <arglist> arg_list
+%type <list> arg_list const_fields record_body
 %type <symbol> constant
 %type <varopt> var_options
 %type <type> type_rule
-%type <record> record_body
+/* %type <record> record_body */
+%type <const_expr> const_expr
+%type <const_field> const_field
 %%
 
 Input : prog_header { printf("#include <stdio.h>\n"); }
@@ -175,7 +174,7 @@ statement : func_call
           | IDENT ':' '=' expression ';' { printf("%s = %s;\n", string_toupper($1), $4); free($1); free($4); }
           ;
 
-expression : IDENT { $$ = strdup(string_toupper($1)); }
+expression : IDENT { $$ = string_toupper($1); }
            | INT_CONST { $$ = strdup($1); }
            | REAL_CONST { $$ = strdup($1); }
            | '(' expression ')' { char *s = NULL; asprintf(&s, "(%s)", $2); free($2); $$ = s; }
@@ -245,8 +244,8 @@ func_call : IDENT '(' arg_list ')' ';'
             }
           ;
 
-arg_list : arg { $$ = NULL; add_arg(&($$), $1); free($1); }
-         | arg_list ',' arg { add_arg(&($1), $3); free($3); $$ = $1; }
+arg_list : arg { $$ = NULL; add_to_list(&($$), $1); }
+         | arg_list ',' arg { add_to_list(&($1), $3); $$ = $1; }
          ;
 
 arg : STRING_LITERAL {
@@ -273,7 +272,7 @@ var_arg : IDENT var_options
         ;
 
 var_options : { $$ = NULL; }
-            | ':' INT_CONST ':' INT_CONST { $$ = (VarOpt *)malloc(sizeof(VarOpt)); $$->len = atoi($2); $$->precision = atoi($4); }
+            | ':' INT_CONST ':' INT_CONST { $$ = (VarOpt *)malloc(sizeof(VarOpt)); $$->len = $2; $$->precision = $4; }
             ;
 
 prog_header :
@@ -302,10 +301,10 @@ var_decl_list : var_decl
 
 record_body : field_decl  ';' {
                    $$ = NULL;
-                   add_fields(&($$), $1);
+                   add_to_list(&($$), $1);
               }
             | record_body
-              field_decl ';' { add_fields(&($1), $2); $$ = $1; }
+              field_decl ';' { add_to_list(&($1), $2); $$ = $1; }
             ;
 
 field_decl : var_list ':' IDENT
@@ -326,13 +325,13 @@ type_rule : IDENT
             KWD_END {
               $$ = (Type *)malloc(sizeof(Type));
               $$->type = RECORD;
-              memcpy(&($$->record), $2, sizeof(Record));
+              $$->record = $2;
             }
           ;
 
 var_decl : var_list ':' type_rule ';'
            {
-               process_var_decl($1, $3);
+               add_vars_to_globals($1, $3);
                $1->type = $3;
                print_vars($1);
                clear_vars(&($1));
@@ -350,53 +349,90 @@ const_decls : const_decl
             | const_decls const_decl
             ;
 
-const_record_field : IDENT ':' 
-                   ;
 
-const_record_fields :
-                    ;
-
-const_record : '(' const_record_fields ')'
-             ;
-
-literal : CHAR_CONST {
-               $$ = (Literal *)malloc(sizeof(Literal));
+const_expr : CHAR_CONST {
+               $$ = (ConstExpr *)malloc(sizeof(ConstExpr));
                $$->type = CHAR_CONST;
-               $$->value = $1;
+               $$->value.string = $1;
            }
-        | INT_CONST  {
-            $$ = (Literal *)malloc(sizeof(Literal));
+        | INT_CONST {
+            $$ = (ConstExpr *)malloc(sizeof(ConstExpr));
             $$->type = INT_CONST;
-            $$->value = $1;
+            $$->value.string = $1;
           }
         | REAL_CONST {
-            $$ = (Literal *)malloc(sizeof(Literal));
+            $$ = (ConstExpr *)malloc(sizeof(ConstExpr));
             $$->type = REAL_CONST;
-            $$->value = $1;
+            $$->value.string = $1;
           }
+        | '(' const_fields ')' {
+                   $$ = (ConstExpr *)malloc(sizeof(ConstExpr));
+                   $$->type = RECORD;
+                   $$->value.record = $2;
+               }
         ;
 
-const_value : literal
+const_field : IDENT ':' const_expr {
+                       ConstField *field;
+                       if ($3->type == RECORD)
+                           yyerror("nested records are not allowed");
+                       field = (ConstField *)malloc(sizeof(ConstField));
+                       field->name = $1;
+                       field->value = $3;
+                       $$ = field;
+                   }
+            ;
 
-const_decl : constant '=' literal
-             { check_const($1->type->type, $3); print_const($1, $3); } ';'
-           | constant '=' const_record ';'
+const_fields : const_field { $$ = NULL; add_to_list(&($$), $1); }
+             | const_fields ';' const_field { add_to_list(&($1), $3); }
+             ;
+
+const_decl : constant '=' const_expr ';'
+             { check_const($1->type, $3); print_const($1, $3); }
            ;
 
 constant : IDENT ':' type_rule
              {
-                 VarList var;
-                 SymbolEntry *symbol = (SymbolEntry *)malloc(sizeof(SymbolEntry));
-                 var.count = 1;
-                 var.varnames = &($1);
-                 process_var_decl(&var, $3);
-                 symbol->name = string_toupper($1);
-                 symbol->type = $3;
-                 $$ = symbol;
+                 $$ = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+                 add_global_symbol($1, $3);
+                 $$->name = string_toupper(strdup($1));
+                 $$->type = $3;
              }
            ;
 
 %%
+
+void add_to_list(List **listptr, void *element)
+{
+    if (! listptr)
+        return;
+    if (! *listptr)
+    {
+        *listptr = (List *)malloc(sizeof(List));
+        (*listptr)->size = 8;
+        (*listptr)->count = 0;
+        (*listptr)->elements = (void **)malloc(sizeof(void *) * (*listptr)->size);
+    }
+    if ((*listptr)->count == (*listptr)->size)
+    {
+        (*listptr)->size += 8;
+        (*listptr)->elements = (void **)realloc((*listptr)->elements,
+                                                sizeof(void *) * (*listptr)->size);
+    }
+    (*listptr)->elements[(*listptr)->count] = element;
+    (*listptr)->count++;
+}
+
+void clear_list(List **listptr)
+{
+    int i;
+    if (! listptr || ! *listptr)
+        return;
+    for (i = 0; i < (*listptr)->count; i++)
+        free((*listptr)->elements[i]);
+    free(*listptr);
+    *listptr = NULL;
+}
 
 char *string_toupper(char *string)
 {
@@ -411,18 +447,6 @@ char *string_toupper(char *string)
     return string;
 }
 
-void process_var_decl(VarList *vars, Type *type)
-{
-    char *varname;
-    varname = add_vars_to_globals(vars, type);
-    if (varname != NULL)
-    {
-        printf("identifier %s ", varname);
-        yyerror("redeclared");
-    }
-}
-
-
 int int_in_bounds(char *value, long int low, long int high)
 {
     long int num = strtol(value, NULL, 10);
@@ -435,40 +459,6 @@ int int_in_bounds(char *value, long int low, long int high)
     return 1;
 }
 
-void check_int_const(BUILTIN_TYPE type, char *value)
-{
-    if (type == CHAR)
-    {
-        yyerror("incompatible types 'Char' and 'Integer'");
-    }
-    switch (type)
-    {
-        case BYTE:
-            if (int_in_bounds(value, 0, 255))
-                return;
-            break;
-        case SHORTINT:
-            if (int_in_bounds(value, -128, 127))
-                return;
-            break;
-        case INTEGER: case LONGINT:
-            if (int_in_bounds(value, -2147483648, 2147483647))
-                return;
-            break;
-        case WORD:
-            if (int_in_bounds(value, 0, 65535))
-                return;
-            break;
-        case COMP:
-            if (float_in_bounds(value, "-9223372036854775808", "9223372036854775807"))
-                return;
-            break;
-        default:
-            check_real_const(type, value);
-            return;
-    }
-    yyerror("constant expression violates subrange bounds");
-}
 
 int parse_float(char *number, char *significand, long int *exponent)
 {
@@ -592,7 +582,60 @@ int float_in_bounds(char *number, char *low, char *high)
     return 1;
 }
 
-void check_const()
+void check_const(Type *type, ConstExpr *expr)
+{
+    switch (expr->type)
+    {
+        case CHAR_CONST:
+            check_char_const(type->type, expr->value.string);
+            break;
+        case INT_CONST:
+            check_int_const(type->type, expr->value.string);
+            break;
+        case REAL_CONST:
+            check_real_const(type->type, expr->value.string);
+            break;
+        case RECORD:
+            check_record_const(type, expr);
+            break;
+    }
+    
+}
+
+void check_int_const(BUILTIN_TYPE type, char *value)
+{
+    if (type == CHAR)
+    {
+        yyerror("incompatible types 'Char' and 'Integer'");
+    }
+    switch (type)
+    {
+        case BYTE:
+            if (int_in_bounds(value, 0, 255))
+                return;
+            break;
+        case SHORTINT:
+            if (int_in_bounds(value, -128, 127))
+                return;
+            break;
+        case INTEGER: case LONGINT:
+            if (int_in_bounds(value, -2147483648, 2147483647))
+                return;
+            break;
+        case WORD:
+            if (int_in_bounds(value, 0, 65535))
+                return;
+            break;
+        case COMP:
+            if (float_in_bounds(value, "-9223372036854775808", "9223372036854775807"))
+                return;
+            break;
+        default:
+            check_real_const(type, value);
+            return;
+    }
+    yyerror("constant expression violates subrange bounds");
+}
 
 void check_real_const(BUILTIN_TYPE type, char *value)
 {
@@ -639,6 +682,40 @@ void check_char_const(BUILTIN_TYPE type, char *value)
     }
 }
 
+Type *get_field_type(char *name, List *record)
+{
+    int i;
+    for (i = 0; i < record->count; i++)
+    {
+        int j;
+        VarList *varlist = ((VarList *)record->elements[i]);
+        Type *type = varlist->type;
+        for (j = 0; j < varlist->vars->count; j++)
+            if (strcasecmp(name, ((char *)varlist->vars->elements[j])) == 0)
+                return type;
+    }
+    return NULL;
+}
+
+void check_record_const(Type *type, ConstExpr *expr)
+{
+    int i;
+    List *record_decl;
+    List *record_val = expr->value.record;
+    if (type->type != RECORD)
+        yyerror("given type is not record");
+    record_decl = type->record;
+    for (i = 0; i < record_val->count; i++)
+    {
+        ConstField *field = (ConstField *)record_val->elements[i];
+        if (! get_field_type(field->name, record_decl))
+        {
+            printf("field %s ", field->name);
+            yyerror("was not found in record");
+        }
+    }
+}
+
 void add_var(VarList **varsptr, char *varname)
 {
     if (! varsptr || ! varname)
@@ -646,62 +723,11 @@ void add_var(VarList **varsptr, char *varname)
     if (! *varsptr)
     {
         *varsptr = (VarList *)malloc(sizeof(VarList));
-        (*varsptr)->size = 8;
-        (*varsptr)->count = 0;
-        (*varsptr)->varnames = (char **)malloc(sizeof(char *) * (*varsptr)->size);
+        (*varsptr)->vars = NULL;
     }
-    if ((*varsptr)->count == (*varsptr)->size)
-    {
-        (*varsptr)->size += 8;
-        (*varsptr)->varnames = (char **)realloc((*varsptr)->varnames,
-                                                sizeof(char *) * (*varsptr)->size);
-    }
-    (*varsptr)->varnames[(*varsptr)->count] = varname;
-    (*varsptr)->count++;
+    add_to_list(&((*varsptr)->vars), varname);
 }
 
-
-void add_arg(ArgumentList **arglistptr, Argument *arg)
-{
-    if (! arglistptr)
-        return;
-    if (! *arglistptr)
-    {
-        *arglistptr = (ArgumentList *)malloc(sizeof(ArgumentList));
-        (*arglistptr)->size = 8;
-        (*arglistptr)->count = 0;
-        (*arglistptr)->args = (Argument *)malloc(sizeof(Argument) * (*arglistptr)->size);
-    }
-    if ((*arglistptr)->count == (*arglistptr)->size)
-    {
-        (*arglistptr)->size += 8;
-        (*arglistptr)->args = (Argument *)realloc((*arglistptr)->args,
-                                                  sizeof(Argument) * (*arglistptr)->size);
-    }
-    memcpy(&((*arglistptr)->args[(*arglistptr)->count]), arg, sizeof(Argument));
-    (*arglistptr)->count++;
-}
-
-void add_fields(Record **recordptr, VarList *fields)
-{
-    if (! recordptr)
-        return;
-    if (! *recordptr)
-    {
-        *recordptr = (Record *)malloc(sizeof(Record));
-        (*recordptr)->size = 8;
-        (*recordptr)->count = 0;
-        (*recordptr)->varlists = (VarList *)malloc(sizeof(VarList) * (*recordptr)->size);
-    }
-    if ((*recordptr)->count == (*recordptr)->size)
-    {
-        (*recordptr)->size += 8;
-        (*recordptr)->varlists = (VarList *)realloc((*recordptr)->varlists,
-                                                    sizeof(VarList) * (*recordptr)->size);
-    }
-    memcpy(&((*recordptr)->varlists[(*recordptr)->count]), fields, sizeof(VarList));
-    (*recordptr)->count++;
-}
 
 void print_type(Type *type)
 {
@@ -711,19 +737,26 @@ void print_type(Type *type)
     {
         int i;
         printf("struct\n{\n");
-        for (i = 0; i < type->record.count; i++)
+        for (i = 0; i < type->record->count; i++)
         {
             printf("  ");
-            print_vars(&(type->record.varlists[i]));
+            print_vars((VarList *)&(type->record->elements[i]));
         }
         printf("}");
     }
 }
 
-void print_const(SymbolEntry *symbol, char *value)
+void print_const(SymbolEntry *symbol, ConstExpr *expr)
 {
-    print_type(symbol->type);
-    printf(" %s = %s;\n", symbol->name, value);
+    if (symbol->type->type != RECORD)
+    {
+        print_type(symbol->type);
+        printf(" %s = %s;\n", symbol->name, expr->value.string);
+        free(symbol->name);
+        free(symbol);
+    }
+    else
+        printf("constant record\n");
 }
 
 void print_vars(VarList *vars)
@@ -731,12 +764,12 @@ void print_vars(VarList *vars)
     int i;
     print_type(vars->type);
     putchar(' ');
-    for (i = 0; i < vars->count - 1; i++)
-        printf("%s, ", string_toupper(vars->varnames[i]));
-    printf("%s;\n", string_toupper(vars->varnames[i]));
+    for (i = 0; i < vars->vars->count - 1; i++)
+        printf("%s, ", string_toupper((char *)vars->vars->elements[i]));
+    printf("%s;\n", string_toupper((char *)vars->vars->elements[i]));
 }
 
-void print_funcall(char *funcname, ArgumentList *arglist)
+void print_funcall(char *funcname, List *arglist)
 {
     int i;
     int function;
@@ -758,11 +791,11 @@ void print_funcall(char *funcname, ArgumentList *arglist)
     }
 
     for (i = 0; i < arglist->count; i++)
-        if (arglist->args[i].string)
-            printf("%s", arglist->args[i].string);
-        else if (arglist->args[i].varname)
-            print_var_arg(arglist->args[i].varname,
-                          arglist->args[i].opt,
+        if (((Argument *)arglist->elements[i])->string)
+            printf("%s", ((Argument *)arglist->elements[i])->string);
+        else if (((Argument *)arglist->elements[i])->varname)
+            print_var_arg(((Argument *)arglist->elements[i])->varname,
+                          ((Argument *)arglist->elements[i])->opt,
                           function == READ_FUNC);
 
     if (function == WRITELN_FUNC)
@@ -770,9 +803,9 @@ void print_funcall(char *funcname, ArgumentList *arglist)
     printf("\"");
 
     for (i = 0; i < arglist->count; i++)
-        if (arglist->args[i].varname)
+        if (((Argument *)arglist->elements[i])->varname)
             printf(",%s%s", function == READ_FUNC ? "&" : "",
-                   string_toupper(arglist->args[i].varname));
+                   string_toupper(((Argument *)arglist->elements[i])->varname));
 
     printf(");\n");
 }
@@ -781,64 +814,56 @@ void clear_vars(VarList **varsptr)
 {
     if (! varsptr || ! *varsptr)
         return;
-    free((*varsptr)->varnames);
+    clear_list(&((*varsptr)->vars));
     free(*varsptr);
     *varsptr = NULL;
 }
 
-void clear_args(ArgumentList **arglistptr)
+void clear_args(List **arglistptr)
 {
     int i;
-    if (! arglistptr && ! *arglistptr)
+    if (! arglistptr || ! *arglistptr)
         return;
     for (i = 0; i < (*arglistptr)->count; i++)
     {
-        free((*arglistptr)->args[i].varname);
-        free((*arglistptr)->args[i].string);
-        free((*arglistptr)->args[i].opt);
+        free(((Argument *)(*arglistptr)->elements[i])->varname);
+        free(((Argument *)(*arglistptr)->elements[i])->string);
+        free(((Argument *)(*arglistptr)->elements[i])->opt);
     }
-    free((*arglistptr)->args);
-    free(*arglistptr);
-    *arglistptr = NULL;
+    clear_list(arglistptr);
 }
 
 void add_global_symbol(char *name, Type *type)
 {
-    if (! GlobalSymbolTable.entries)
+    List *globalSymbolTablePtr = &GlobalSymbolTable;
+    SymbolEntry *entry;
+    if (get_var_type(name) != NULL)
     {
-        GlobalSymbolTable.size = 8;
-        GlobalSymbolTable.count = 0;
-        GlobalSymbolTable.entries = (SymbolEntry *)malloc(
-            sizeof(SymbolEntry) * GlobalSymbolTable.size);
+        int i = 0;
+        printf("identifier %s ", name);
+        yyerror("redeclared");
     }
-    if (GlobalSymbolTable.count == GlobalSymbolTable.size)
-    {
-        GlobalSymbolTable.size += 8;
-        GlobalSymbolTable.entries = (SymbolEntry *)realloc(GlobalSymbolTable.entries,
-            sizeof(SymbolEntry) * GlobalSymbolTable.size);
-    }
-    GlobalSymbolTable.entries[GlobalSymbolTable.count].name = name;
-    GlobalSymbolTable.entries[GlobalSymbolTable.count].type = type;
-    GlobalSymbolTable.count++;
+    entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+    entry->name = name;
+    entry->type = type;
+    add_to_list(&globalSymbolTablePtr, entry);
 }
 
-char *add_vars_to_globals(VarList *vars, Type *type)
+void add_vars_to_globals(VarList *vars, Type *type)
 {
     int i;
-    for (i = 0; i < vars->count; i++)
-        if (get_var_type(vars->varnames[i]) != NULL)
-            return vars->varnames[i];
-        else
-            add_global_symbol(vars->varnames[i], type);
-    return NULL;
+    for (i = 0; i < vars->vars->count; i++)
+        add_global_symbol(strdup((char *)vars->vars->elements[i]), type);
 }
 
 Type *get_var_type(char *name)
 {
     int i;
     for (i = 0; i < GlobalSymbolTable.count; i++)
-        if (strcasecmp(name, GlobalSymbolTable.entries[i].name) == 0)
-            return GlobalSymbolTable.entries[i].type;
+        if (strcasecmp(name, ((SymbolEntry *)GlobalSymbolTable.elements[i])->name) == 0)
+        {
+            return ((SymbolEntry *)GlobalSymbolTable.elements[i])->type;
+        }
     return NULL;
 }
 
@@ -892,7 +917,12 @@ void print_var_arg(char *name, VarOpt *vo, int if_scanf)
 {
     printf("%%");
     if (vo)
-        printf("%d.%d", vo->len, vo->precision);
+    {
+        printf("%s.%s", vo->len, vo->precision);
+        free(vo->len);
+        free(vo->precision);
+        free(vo);
+    }
     switch (get_var_type(name)->type)
     {
         case CHAR:
