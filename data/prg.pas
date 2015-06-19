@@ -11,10 +11,10 @@ const l : record
    f      : real;
    cc     : char;
    io, lk : integer;
-end =  (io : 5; cc : 7);
+end          = (io : 5; cc : 7);
+   ca : char =  'as';
 
 beGIN
    r := r * 8;
-   ser.xx := 4;
    writeln('q = ', er, q);
 END . 

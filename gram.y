@@ -24,7 +24,8 @@
       COMP = 10,
       CHAR = 11,
       RECORD = 12,
-      WRONG_TYPE = 13
+      ARRAY = 13,
+      WRONG_TYPE = 14
   };
   typedef enum BUILTIN_TYPE BUILTIN_TYPE;
 
@@ -35,7 +36,7 @@
   };
   
 
-  struct VarList;
+  typedef struct Array Array;
 
   typedef struct List
   {
@@ -47,7 +48,11 @@
   typedef struct Type
   {
       BUILTIN_TYPE type;
-      List *record;
+      union
+      {
+          List *record;
+          Array *array;
+      } u;
   } Type;
 
   typedef struct VarList
@@ -104,6 +109,14 @@
       ConstExpr *value;
   } ConstField;
 
+  struct Array
+  {
+      int bounds_type;
+      int low;
+      int high;
+      Type *type;
+  };
+  
 
   void add_to_list(List **listptr, void *element);
   void add_var(VarList **varsptr, char *varname);
@@ -179,7 +192,7 @@ var : IDENT { $$ = string_toupper($1); }
             printf("identifier %s ", $1);
             yyerror("is not of record type");
         }
-        if (! get_field_type($3, type->record))
+        if (! get_field_type($3, type->u.record))
         {
             printf("element %s does not have field %s", $1, $3);
             yyerror("");
@@ -351,7 +364,7 @@ type_rule : IDENT
             KWD_END {
               $$ = (Type *)malloc(sizeof(Type));
               $$->type = RECORD;
-              $$->record = $2;
+              $$->u.record = $2;
             }
           ;
 
@@ -738,7 +751,7 @@ void check_record_const(Type *type, ConstExpr *expr)
     List *record_val = expr->value.record;
     if (type->type != RECORD)
         yyerror("given type is not record");
-    record_decl = type->record;
+    record_decl = type->u.record;
     for (i = 0; i < record_val->count; i++)
     {
         ConstField *field = (ConstField *)record_val->elements[i];
@@ -771,10 +784,10 @@ void print_type(Type *type)
     {
         int i;
         printf("struct\n{\n");
-        for (i = 0; i < type->record->count; i++)
+        for (i = 0; i < type->u.record->count; i++)
         {
             printf("  ");
-            print_vars((VarList *)type->record->elements[i]);
+            print_vars((VarList *)type->u.record->elements[i]);
         }
         printf("}");
     }
@@ -793,7 +806,7 @@ void print_const(SymbolEntry *symbol, ConstExpr *expr)
     {
         int i;
         int printed = 0;
-        List *record = symbol->type->record;
+        List *record = symbol->type->u.record;
         List *record_val = expr->value.record;
         printf(" %s = {", symbol->name);
         for (i = 0; i < record->count; i++)
