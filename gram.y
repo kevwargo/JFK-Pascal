@@ -163,10 +163,10 @@
 %type <text> expression var
 %type <argument> arg var_arg
 %type <varlist> var_list var_decl field_decl
-%type <list> arg_list const_fields record_body
+%type <list> arg_list const_fields record_body array_index
 %type <symbol> constant
 %type <varopt> var_options
-%type <type> type_rule array_decl array_bounds array_multi_bounds array_bounds_decl
+%type <type> type_rule array_decl array_bounds array_multi_bounds array_bounds_decl array_element
 %type <const_expr> const_expr
 %type <const_field> const_field
 /* %type <array> array_bounds array_multi_bounds array_bounds_decl */
@@ -178,6 +178,46 @@ Input : prog_header { printf("#include <stdio.h>\n"); }
         statements
         KWD_END { printf("  return 0;\n}\n"); } '.'
       ;
+
+array_index : INT_CONST { $$ = NULL; add_to_list(&($$), $1); }
+            | CHAR_CONST { $$ = NULL; add_to_list(&($$), $1); }
+            | array_index ',' INT_CONST { add_to_list(&($1), $3); $$ = $1; }
+            | array_index ',' CHAR_CONST { add_to_list(&($1), $3); $$ = $1; }
+            ;
+
+array_element : IDENT '[' array_index ']' {
+                    int i;
+                    Type *type = get_var_type($1);
+                    $$ = type;
+                    if (! type) yyerror("symbol not found");
+                    if (type->type != ARRAY) yyerror("cannot subscribe non-array");
+                    printf("%s", $1);
+                    for (i = 0; i < $3->count; i++)
+                    {
+                        if (type->type != ARRAY)
+                            yyerror("array indexing error: to much dimensions");
+                        if (type->u.array->bounds_type == CHAR_CONST)
+                            printf("[%s - ('%c')]", ((char *)$3->elements[i]), type->u.array->low);
+                        else
+                            printf("[%s - (%d)]", ((char *)$3->elements[i]), type->u.array->low);
+                        type = type->u.array->type;
+                    }
+                }
+              | array_element '[' array_index ']' {
+                  int i;
+                  Type *type = $1;
+                  for (i = 0; i < $3->count; i++)
+                    {
+                        if (type->type != ARRAY)
+                            yyerror("array indexing error: to much dimensions");
+                        if (type->u.array->bounds_type == CHAR_CONST)
+                            printf("[%s - ('%c')]", ((char *)$3->elements[i]), type->u.array->low);
+                        else
+                            printf("[%s - (%d)]", ((char *)$3->elements[i]), type->u.array->low);
+                        type = type->u.array->type;
+                    }
+                }
+              ;
 
 var : IDENT { $$ = string_toupper($1); }
     | IDENT '.' IDENT {
@@ -203,6 +243,7 @@ var : IDENT { $$ = string_toupper($1); }
         free($1);
         free($3);
       }
+    | array_element { $$ = strdup(""); }
     ;
 
 statements :
@@ -354,17 +395,39 @@ field_decl : var_list ':' IDENT
              }
            ;
 
-array_bounds : INT_CONST '.' '.' INT_CONST { $$ = create_dummy_array($1, $4); }
-             | REAL_CONST { if ($1[strlen($1) - 1] != '.') yyerror("syntax error"); }
+array_left_bound : INT_CONST
+                 | REAL_CONST { if ($1[strlen($1) - 1] != '.') yyerror("syntax error"); }
+                 | CHAR_CONST
+                 ;
+
+array_right_bound : INT_CONST
+                  | REAL_CONST ')'
+                  | CHAR_CONST
+                  ;
+
+array_bounds : '[' array_left_bound '.' '.' array_right_bound
+                   { $$ = create_dummy_array($1, $4); }
+             | '[' array_left_bound '.' array_right_bound
+                   { $$ = create_dummy_array($1, $3); }
+
+array_bounds : INT_CONST '.' '.' INT_CONST 
+             | REAL_CONST 
                '.' INT_CONST { $$ = create_dummy_array($1, $4); }
              | CHAR_CONST '.' '.' CHAR_CONST { $$ = create_dummy_array($1, $4); }
              ;
 
 array_multi_bounds : array_bounds { $$ = $1; }
-                   | array_multi_bounds ',' array_bounds { $1->u.array->type = $3; $$ = $1; }
+                   | array_multi_bounds ',' array_bounds {
+                       Type *type = $1;
+                       while (type->u.array->type != NULL)
+                           type = type->u.array->type;
+                       type->u.array->type = $3;
+                       $$ = $1;
+                     }
                    ;
 
 array_bounds_decl : '[' array_multi_bounds ']' { $$ = $2; }
+                  | '[' array_multi_bounds 
                   ;
 
 array_decl : KWD_ARRAY array_bounds_decl KWD_OF IDENT {
@@ -374,7 +437,7 @@ array_decl : KWD_ARRAY array_bounds_decl KWD_OF IDENT {
                        type = type->u.array->type;
                    }
                    type->u.array->type = type_parse($4);
-                   $$ = type;
+                   $$ = $2;
                }
            | KWD_ARRAY array_bounds_decl KWD_OF array_decl {
                    Type *type = $2;
@@ -383,7 +446,7 @@ array_decl : KWD_ARRAY array_bounds_decl KWD_OF IDENT {
                        type = type->u.array->type;
                    }
                    type->u.array->type = $4;
-                   $$ = type;
+                   $$ = $2;
                }
            ;
 
@@ -472,14 +535,26 @@ constant : IDENT ':' type_rule
 
 Type *create_dummy_array(char *low, char *high)
 {
-    /* if (! int_in_bounds(low, -2147483648, 2147483647)) */
-    /*     yyerror("array low index out of range"); */
-    /* if (! int_in_bounds(high, -2147483648, 2147483647)) */
-    /*     yyerror("array high index out of range"); */
     Type *type = (Type *)malloc(sizeof(Type));
     Array *array = (Array *)malloc(sizeof(Array));
-    array->low = atoi(low);
-    array->high = atoi(high);
+    if (*low == '\'')
+    {
+        array->bounds_type = CHAR_CONST;
+        array->low = low[1];
+        array->high = high[1];
+    }
+    else
+    {
+        if (! int_in_bounds(low, -2147483648, 2147483647))
+            yyerror("array low index out of range");
+        if (! int_in_bounds(high, -2147483648, 2147483647))
+            yyerror("array high index out of range");
+        array->bounds_type = INT_CONST;
+        array->low = atoi(low);
+        array->high = atoi(high);
+    }
+    if (array->low > array->high)
+        yyerror("array low bound is greater than high");
     array->type = NULL;
     type->type = ARRAY;
     type->u.array = array;
@@ -910,7 +985,10 @@ void print_vars(VarList *vars)
             btype = type;
             while (btype->type == ARRAY)
             {
-                printf("[%d]", btype->u.array->high - btype->u.array->low);
+                if (btype->u.array->bounds_type == CHAR_CONST)
+                    printf("['%c' - ('%c') + 1]", btype->u.array->high, btype->u.array->low);
+                else
+                    printf("[%d - (%d) + 1]", btype->u.array->high, btype->u.array->low);
                 btype = btype->u.array->type;
             }
             printf(", ");
@@ -919,7 +997,10 @@ void print_vars(VarList *vars)
         btype = type;
         while (btype->type == ARRAY)
         {
-            printf("[%d]", btype->u.array->high - btype->u.array->low);
+            if (btype->u.array->bounds_type == CHAR_CONST)
+                printf("['%c' - ('%c') + 1]", btype->u.array->high, btype->u.array->low);
+            else
+                    printf("[%d - (%d) + 1]", btype->u.array->high, btype->u.array->low);
             btype = btype->u.array->type;
         }
         printf(";\n");

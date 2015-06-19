@@ -1,8 +1,9 @@
 progRam lepecbeke;
 
 var    
-   a    :  array [4..11,4..22,7..23] of array [8..111] of integer;
+   a    :  array [-0..11,0..2264,0..23.) of integer;
 
 
 beGIN
+   a['p'][5,1] := 5;
 END . 
