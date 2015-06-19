@@ -1,20 +1,8 @@
 progRam lepecbeke;
 
-var er, q : integer;
+var    
+   a    :  array [4..11,4..22,7..23] of array [8..111] of integer;
 
-var ss : record
-   x, y : integer;
-   r    :  real;
-end;
-
-const l : record
-   f      : real;
-   cc     : char;
-   io, lk : integer;
-end          = (io : 5; cc : 7);
-   ca : char =  'as';
 
 beGIN
-   r := r * 8;
-   writeln('q = ', er, q);
 END . 

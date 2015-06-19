@@ -21,6 +21,8 @@
 <INITIAL>[sS][hH][rR]                       return KWD_SHR;
 <INITIAL>[dD][iI][vV]                       return KWD_DIV;
 <INITIAL>[rR][eE][cC][oO][rR][dD]           return KWD_RECORD;
+<INITIAL>[aA][rR][rR][aA][yY]               return KWD_ARRAY;
+<INITIAL>[oO][fF]                           return KWD_OF;
 
 <INITIAL>[_a-zA-Z][_0-9a-zA-Z]*             { yylval.text = strdup(yytext);
                                               return IDENT;

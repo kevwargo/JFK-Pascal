@@ -34,7 +34,7 @@
       TYPE_ERROR_OUTRANGE,
       TYPE_ERROR_INCOMPATIBLE
   };
-  
+
 
   typedef struct Array Array;
 
@@ -116,15 +116,14 @@
       int high;
       Type *type;
   };
-  
+
 
   void add_to_list(List **listptr, void *element);
   void add_var(VarList **varsptr, char *varname);
-  /* void add_fields(Record **recordptr, VarList *fields); */
   void print_vars(VarList *vars);
   void clear_vars(VarList **varsptr);
   void clear_args(List **arglistptr);
-  BUILTIN_TYPE type_parse(char *pascal_type);
+  Type *type_parse(char *pascal_type);
   char *get_c_type(BUILTIN_TYPE type);
   void add_vars_to_globals(VarList *vars, Type *type);
   void add_global_symbol(char *name, Type *type);
@@ -140,6 +139,7 @@
   void print_var_arg(char *name, VarOpt *vo, int if_scanf);
   void print_funcall(char *funcname, List *arglist);
   void print_type(Type *type);
+  Type *create_dummy_array(char *low, char *high);
 
   List GlobalSymbolTable;
 
@@ -153,12 +153,12 @@
     struct Argument *argument;
     struct List *list;
     struct Type *type;
-    /* struct Record *record; */
     struct ConstExpr *const_expr;
     struct ConstField *const_field;
+    struct Array *array;
     int ival;
 }
-%token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD WRITE_FUNC WRITELN_FUNC READ_FUNC
+%token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD KWD_ARRAY KWD_OF WRITE_FUNC WRITELN_FUNC READ_FUNC
 %token <text> IDENT INT_CONST CHAR_CONST REAL_CONST STRING_LITERAL
 %type <text> expression var
 %type <argument> arg var_arg
@@ -166,10 +166,10 @@
 %type <list> arg_list const_fields record_body
 %type <symbol> constant
 %type <varopt> var_options
-%type <type> type_rule
-/* %type <record> record_body */
+%type <type> type_rule array_decl array_bounds array_multi_bounds array_bounds_decl
 %type <const_expr> const_expr
 %type <const_field> const_field
+/* %type <array> array_bounds array_multi_bounds array_bounds_decl */
 %%
 
 Input : prog_header { printf("#include <stdio.h>\n"); }
@@ -348,24 +348,53 @@ record_body : field_decl  ';' {
 
 field_decl : var_list ':' IDENT
              {
-                 Type *type = (Type *)malloc(sizeof(Type));
-                 type->type = type_parse($3);
+                 Type *type = type_parse($3);
                  $1->type = type;
                  $$ = $1;
              }
            ;
 
-type_rule : IDENT
-                {
-                    $$ = (Type *)malloc(sizeof(Type));
-                    $$->type = type_parse($1);
-                }
-          | KWD_RECORD record_body 
+array_bounds : INT_CONST '.' '.' INT_CONST { $$ = create_dummy_array($1, $4); }
+             | REAL_CONST { if ($1[strlen($1) - 1] != '.') yyerror("syntax error"); }
+               '.' INT_CONST { $$ = create_dummy_array($1, $4); }
+             | CHAR_CONST '.' '.' CHAR_CONST { $$ = create_dummy_array($1, $4); }
+             ;
+
+array_multi_bounds : array_bounds { $$ = $1; }
+                   | array_multi_bounds ',' array_bounds { $1->u.array->type = $3; $$ = $1; }
+                   ;
+
+array_bounds_decl : '[' array_multi_bounds ']' { $$ = $2; }
+                  ;
+
+array_decl : KWD_ARRAY array_bounds_decl KWD_OF IDENT {
+                   Type *type = $2;
+                   while (type->u.array->type != NULL)
+                   {
+                       type = type->u.array->type;
+                   }
+                   type->u.array->type = type_parse($4);
+                   $$ = type;
+               }
+           | KWD_ARRAY array_bounds_decl KWD_OF array_decl {
+                   Type *type = $2;
+                   while (type->u.array->type != NULL)
+                   {
+                       type = type->u.array->type;
+                   }
+                   type->u.array->type = $4;
+                   $$ = type;
+               }
+           ;
+
+type_rule : IDENT { $$ = type_parse($1); }
+          | KWD_RECORD record_body
             KWD_END {
               $$ = (Type *)malloc(sizeof(Type));
               $$->type = RECORD;
               $$->u.record = $2;
             }
+          | array_decl { $$ = $1; }
           ;
 
 var_decl : var_list ':' type_rule ';'
@@ -440,6 +469,22 @@ constant : IDENT ':' type_rule
            ;
 
 %%
+
+Type *create_dummy_array(char *low, char *high)
+{
+    /* if (! int_in_bounds(low, -2147483648, 2147483647)) */
+    /*     yyerror("array low index out of range"); */
+    /* if (! int_in_bounds(high, -2147483648, 2147483647)) */
+    /*     yyerror("array high index out of range"); */
+    Type *type = (Type *)malloc(sizeof(Type));
+    Array *array = (Array *)malloc(sizeof(Array));
+    array->low = atoi(low);
+    array->high = atoi(high);
+    array->type = NULL;
+    type->type = ARRAY;
+    type->u.array = array;
+    return type;
+}
 
 void add_to_list(List **listptr, void *element)
 {
@@ -638,7 +683,7 @@ void check_const(Type *type, ConstExpr *expr)
             check_record_const(type, expr);
             break;
     }
-    
+
 }
 
 void check_int_const(BUILTIN_TYPE type, char *value)
@@ -778,18 +823,23 @@ void add_var(VarList **varsptr, char *varname)
 
 void print_type(Type *type)
 {
-    if (type->type != RECORD)
-        printf("%s", get_c_type(type->type));
-    else
+    switch (type->type)
     {
         int i;
-        printf("struct\n{\n");
-        for (i = 0; i < type->u.record->count; i++)
-        {
-            printf("  ");
-            print_vars((VarList *)type->u.record->elements[i]);
-        }
-        printf("}");
+        case RECORD:
+            printf("struct\n{\n");
+            for (i = 0; i < type->u.record->count; i++)
+            {
+                printf("  ");
+                print_vars((VarList *)type->u.record->elements[i]);
+            }
+            printf("}");
+            break;
+        case ARRAY:
+            break;
+        default:
+            printf("%s", get_c_type(type->type));
+            break;
     }
 }
 
@@ -836,18 +886,51 @@ void print_const(SymbolEntry *symbol, ConstExpr *expr)
 void print_vars(VarList *vars)
 {
     int i;
-    print_type(vars->type);
-    putchar(' ');
-    for (i = 0; i < vars->vars->count - 1; i++)
-        printf("%s, ", string_toupper((char *)vars->vars->elements[i]));
-    printf("%s;\n", string_toupper((char *)vars->vars->elements[i]));
+    if (vars->type->type != ARRAY)
+    {
+        print_type(vars->type);
+        putchar(' ');
+        for (i = 0; i < vars->vars->count - 1; i++)
+            printf("%s, ", string_toupper((char *)vars->vars->elements[i]));
+        printf("%s;\n", string_toupper((char *)vars->vars->elements[i]));
+    }
+    else
+    {
+        Type *type = vars->type;
+        Type *btype = type->u.array->type;
+        while (btype->type == ARRAY)
+        {
+            btype = btype->u.array->type;
+        }
+        print_type(btype);
+        putchar(' ');
+        for (i = 0; i < vars->vars->count - 1; i++)
+        {
+            printf("%s", string_toupper((char *)vars->vars->elements[i]));
+            btype = type;
+            while (btype->type == ARRAY)
+            {
+                printf("[%d]", btype->u.array->high - btype->u.array->low);
+                btype = btype->u.array->type;
+            }
+            printf(", ");
+        }
+        printf("%s", string_toupper((char *)vars->vars->elements[i]));
+        btype = type;
+        while (btype->type == ARRAY)
+        {
+            printf("[%d]", btype->u.array->high - btype->u.array->low);
+            btype = btype->u.array->type;
+        }
+        printf(";\n");
+    }
 }
 
 void print_funcall(char *funcname, List *arglist)
 {
     int i;
     int function;
-    
+
     if (strcasecmp(funcname, "write") == 0)
     {
         function = WRITE_FUNC;
@@ -941,24 +1024,29 @@ Type *get_var_type(char *name)
     return NULL;
 }
 
-BUILTIN_TYPE type_parse(char *pascal_type)
+Type *type_parse(char *pascal_type)
 {
+    Type *type;
+    BUILTIN_TYPE btype;
     if (get_var_type(pascal_type) != NULL) /* symbol with name typename was found */
     {
         yyerror("type identifier expected");
     }
-    if (strcasecmp("BYTE", pascal_type) == 0)     return BYTE;
-    if (strcasecmp("SHORTINT", pascal_type) == 0) return SHORTINT;
-    if (strcasecmp("INTEGER", pascal_type) == 0)  return INTEGER;
-    if (strcasecmp("WORD", pascal_type) == 0)     return WORD;
-    if (strcasecmp("LONGINT", pascal_type) == 0)  return LONGINT;
-    if (strcasecmp("REAL", pascal_type) == 0)     return REAL;
-    if (strcasecmp("SINGLE", pascal_type) == 0)   return SINGLE;
-    if (strcasecmp("DOUBLE", pascal_type) == 0)   return DOUBLE;
-    if (strcasecmp("EXTENDED", pascal_type) == 0) return EXTENDED;
-    if (strcasecmp("COMP", pascal_type) == 0)     return COMP;
-    if (strcasecmp("CHAR", pascal_type) == 0)     return CHAR;
-    return WRONG_TYPE;
+    if (strcasecmp("BYTE", pascal_type) == 0)          btype = BYTE;
+    else if (strcasecmp("SHORTINT", pascal_type) == 0) btype = SHORTINT;
+    else if (strcasecmp("INTEGER", pascal_type) == 0)  btype = INTEGER;
+    else if (strcasecmp("WORD", pascal_type) == 0)     btype = WORD;
+    else if (strcasecmp("LONGINT", pascal_type) == 0)  btype = LONGINT;
+    else if (strcasecmp("REAL", pascal_type) == 0)     btype = REAL;
+    else if (strcasecmp("SINGLE", pascal_type) == 0)   btype = SINGLE;
+    else if (strcasecmp("DOUBLE", pascal_type) == 0)   btype = DOUBLE;
+    else if (strcasecmp("EXTENDED", pascal_type) == 0) btype = EXTENDED;
+    else if (strcasecmp("COMP", pascal_type) == 0)     btype = COMP;
+    else if (strcasecmp("CHAR", pascal_type) == 0)     btype = CHAR;
+    else yyerror("wrong type identifier");
+    type = (Type *)malloc(sizeof(Type));
+    type->type = btype;
+    return type;
 }
 
 char *get_c_type(BUILTIN_TYPE type)
