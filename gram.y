@@ -134,7 +134,7 @@
 %union
 {
     char *text;
-    struct VarList *vars;
+    struct VarList *varlist;
     struct SymbolEntry *symbol;
     struct VarOpt *varopt;
     struct Argument *argument;
@@ -147,9 +147,9 @@
 }
 %token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD WRITE_FUNC WRITELN_FUNC READ_FUNC
 %token <text> IDENT INT_CONST CHAR_CONST REAL_CONST STRING_LITERAL
-%type <text> expression
+%type <text> expression var
 %type <argument> arg var_arg
-%type <vars> var_list var_decl field_decl
+%type <varlist> var_list var_decl field_decl
 %type <list> arg_list const_fields record_body
 %type <symbol> constant
 %type <varopt> var_options
@@ -166,15 +166,41 @@ Input : prog_header { printf("#include <stdio.h>\n"); }
         KWD_END { printf("  return 0;\n}\n"); } '.'
       ;
 
+var : IDENT { $$ = string_toupper($1); }
+    | IDENT '.' IDENT {
+        Type *type = get_var_type($1);
+        if (! type)
+        {
+            printf("identifier %s", $1);
+            yyerror(" undeclared");
+        }
+        if (type->type != RECORD)
+        {
+            printf("identifier %s ", $1);
+            yyerror("is not of record type");
+        }
+        if (! get_field_type($3, type->record))
+        {
+            printf("element %s does not have field %s", $1, $3);
+            yyerror("");
+        }
+        asprintf(&($$), "%s.%s",
+                 string_toupper($1),
+                 string_toupper($3));
+        free($1);
+        free($3);
+      }
+    ;
+
 statements :
            | statements { printf("  "); } statement
            ;
 
 statement : func_call
-          | IDENT ':' '=' expression ';' { printf("%s = %s;\n", string_toupper($1), $4); free($1); free($4); }
+          | var ':' '=' expression ';' { printf("%s = %s;\n", string_toupper($1), $4); free($1); free($4); }
           ;
 
-expression : IDENT { $$ = string_toupper($1); }
+expression : var { $$ = string_toupper($1); }
            | INT_CONST { $$ = strdup($1); }
            | REAL_CONST { $$ = strdup($1); }
            | '(' expression ')' { char *s = NULL; asprintf(&s, "(%s)", $2); free($2); $$ = s; }
@@ -604,12 +630,14 @@ void check_const(Type *type, ConstExpr *expr)
 
 void check_int_const(BUILTIN_TYPE type, char *value)
 {
-    if (type == CHAR)
-    {
-        yyerror("incompatible types 'Char' and 'Integer'");
-    }
     switch (type)
     {
+        case CHAR:
+            yyerror("incompatible types 'Char' and 'Integer'");
+            break;
+        case RECORD:
+            yyerror("incompatible types 'Record' and 'Integer'");
+            break;
         case BYTE:
             if (int_in_bounds(value, 0, 255))
                 return;
@@ -644,6 +672,9 @@ void check_real_const(BUILTIN_TYPE type, char *value)
         case CHAR:
             yyerror("incompatible types 'Char' and 'Extended'");
             break;
+        case RECORD:
+            yyerror("incompatible types 'Record' and 'Extended'");
+            break;
         case BYTE: case SHORTINT: case INTEGER: case WORD: case LONGINT: case COMP:
             yyerror("incompatible types 'Integer' and 'Extended'");
             break;
@@ -675,6 +706,9 @@ void check_char_const(BUILTIN_TYPE type, char *value)
             return;
         case BYTE: case SHORTINT: case INTEGER: case WORD: case LONGINT:
             yyerror("incompatible types 'Integer' and 'Char'");
+            break;
+        case RECORD:
+            yyerror("incompatible types 'Record' and 'Char'");
             break;
         default:
             yyerror("incompatible types 'Extended' and 'Char'");
@@ -740,7 +774,7 @@ void print_type(Type *type)
         for (i = 0; i < type->record->count; i++)
         {
             printf("  ");
-            print_vars((VarList *)&(type->record->elements[i]));
+            print_vars((VarList *)type->record->elements[i]);
         }
         printf("}");
     }
@@ -748,15 +782,42 @@ void print_type(Type *type)
 
 void print_const(SymbolEntry *symbol, ConstExpr *expr)
 {
+    print_type(symbol->type);
     if (symbol->type->type != RECORD)
     {
-        print_type(symbol->type);
         printf(" %s = %s;\n", symbol->name, expr->value.string);
         free(symbol->name);
         free(symbol);
     }
     else
-        printf("constant record\n");
+    {
+        int i;
+        int printed = 0;
+        List *record = symbol->type->record;
+        List *record_val = expr->value.record;
+        printf(" %s = {", symbol->name);
+        for (i = 0; i < record->count; i++)
+        {
+            int k;
+            VarList *varlist = (VarList *)record->elements[i];
+            for (k = 0; k < varlist->vars->count; k++)
+            {
+                int j;
+                for (j = 0; j < record_val->count; j++)
+                {
+                    if (strcasecmp(((ConstField *)record_val->elements[j])->name,
+                                   (char *)varlist->vars->elements[k]) == 0)
+                    {
+                        if (printed)
+                            putchar(',');
+                        printf(" %s", ((ConstField *)record_val->elements[j])->value->value.string);
+                        printed++;
+                    }
+                }
+            }
+        }
+        printf(" };\n");
+    }
 }
 
 void print_vars(VarList *vars)

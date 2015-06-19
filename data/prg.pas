@@ -8,11 +8,13 @@ var ss : record
 end;
 
 const l : record
-   f  : real;
-   cc :  char;
-end =  5;
+   f      : real;
+   cc     : char;
+   io, lk : integer;
+end =  (io : 5; cc : 7);
 
 beGIN
    r := r * 8;
+   ser.xx := 4;
    writeln('q = ', er, q);
 END . 
