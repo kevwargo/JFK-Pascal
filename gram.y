@@ -128,7 +128,7 @@
   char *get_c_type(BUILTIN_TYPE type);
   void add_vars_to_globals(VarList *vars, Type *type);
   void add_global_symbol(char *name, Type *type);
-  char *string_toupper(char *string);
+  void print_toupper(char *string);
   Type *get_var_type(char *name);
   Type *get_field_type(char *name, List *record);
   void check_const(Type *type, ConstExpr *expr);
@@ -198,41 +198,7 @@ array_element : IDENT '[' array_index ']' {
                 }
               ;
 
-/* array_element : IDENT '[' array_index ']' { */
-/*                     int i; */
-/*                     Type *type = get_var_type($1); */
-/*                     $$ = type; */
-/*                     if (! type) yyerror("symbol not found"); */
-/*                     if (type->type != ARRAY) yyerror("cannot subscribe non-array"); */
-/*                     printf("%s", $1); */
-/*                     for (i = 0; i < $3->count; i++) */
-/*                     { */
-/*                         if (type->type != ARRAY) */
-/*                             yyerror("array indexing error: to much dimensions"); */
-/*                         if (type->u.array->bounds_type == CHAR_CONST) */
-/*                             printf("[%s - ('%c')]", ((char *)$3->elements[i]), type->u.array->low); */
-/*                         else */
-/*                             printf("[%s - (%d)]", ((char *)$3->elements[i]), type->u.array->low); */
-/*                         type = type->u.array->type; */
-/*                     } */
-/*                 } */
-/*               | array_element '[' array_index ']' { */
-/*                   int i; */
-/*                   Type *type = $1; */
-/*                   for (i = 0; i < $3->count; i++) */
-/*                     { */
-/*                         if (type->type != ARRAY) */
-/*                             yyerror("array indexing error: to much dimensions"); */
-/*                         if (type->u.array->bounds_type == CHAR_CONST) */
-/*                             printf("[%s - ('%c')]", ((char *)$3->elements[i]), type->u.array->low); */
-/*                         else */
-/*                             printf("[%s - (%d)]", ((char *)$3->elements[i]), type->u.array->low); */
-/*                         type = type->u.array->type; */
-/*                     } */
-/*                 } */
-/*               ; */
-
-var : IDENT { $$ = string_toupper($1); }
+var : IDENT
     | IDENT '.' IDENT { $$ = check_record_member($1, $3); free($1); free($3); }
     | array_element { $$ = strdup(""); }
     ;
@@ -242,14 +208,26 @@ statements :
            ;
 
 statement : func_call
-          | var ':' '=' expression ';' { printf("%s = %s;\n", string_toupper($1), $4); free($1); free($4); }
+          | var ':' '=' expression ';' {
+                    print_toupper($1);
+                    printf(" = ");
+                    print_toupper($4);
+                    printf(";\n");
+                    free($1);
+                    free($4);
+                 }
           ;
 
-expression : var { $$ = string_toupper($1); }
-           | INT_CONST { $$ = strdup($1); }
-           | REAL_CONST { $$ = strdup($1); }
-           | CHAR_CONST { $$ = strdup($1); }
-           | '(' expression ')' { char *s = NULL; asprintf(&s, "(%s)", $2); free($2); $$ = s; }
+expression : var
+           | INT_CONST
+           | REAL_CONST
+           | CHAR_CONST
+           | '(' expression ')' {
+                     char *s = NULL;
+                     asprintf(&s, "(%s)", $2);
+                     free($2);
+                     $$ = s;
+                 }
            | expression '*' expression {
                char *s = NULL;
                asprintf(&s, "%s * %s", $1, $3);
@@ -662,17 +640,16 @@ void clear_list(List **listptr)
     *listptr = NULL;
 }
 
-char *string_toupper(char *string)
+void print_toupper(char *string)
 {
-    int i = 0;
+    char *upper;
     if (! string)
-        return NULL;
-    while (string[i])
-    {
-        string[i] = toupper(string[i]);
-        i++;
-    }
-    return string;
+        return;
+    upper = strdup(string);
+    while (*string)
+        upper[i] = toupper(*(string++));
+    printf("%s", upper);
+    free(upper);
 }
 
 int int_in_bounds(char *value, long int low, long int high)
