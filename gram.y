@@ -139,7 +139,7 @@
   char *check_record_member(char *record, char *member);
   Type *check_and_print_array_index(char *symbol, List *index_list);
   Type *check_and_print_type_array_index(Type *type, List *index_list, char *symbol);
-  void print_const(SymbolEntry *symbol, ConstExpr *expr);
+  void print_const(char *symbol, Type *type, ConstExpr *expr);
   void print_var_arg(char *name, VarOpt *vo, int if_scanf);
   void print_funcall(char *funcname, List *arglist);
   void print_type(Type *type);
@@ -170,7 +170,6 @@
 %type <argument> arg var_arg
 %type <varlist> var_list var_decl field_decl
 %type <list> arg_list const_fields record_body array_index
-%type <symbol> constant
 %type <varopt> var_options
 %type <type> type_rule array_decl array_bounds array_bounds_decl array_multi_bounds array_low_int_bound array_low_char_bound array_head array_element
 %type <const_expr> const_expr
@@ -469,16 +468,12 @@ const_fields : const_field { $$ = NULL; add_to_list(&($$), $1); }
              | const_fields ';' const_field { add_to_list(&($1), $3); }
              ;
 
-const_decl : constant '=' const_expr ';'
-             { check_const($1->type, $3); print_const($1, $3); }
-           ;
-
-constant : IDENT ':' type_rule
+const_decl : IDENT ':' type_rule '=' const_expr ';'
              {
-                 $$ = (SymbolEntry *)malloc(sizeof(SymbolEntry));
+                 printf("global %s of type %s found\n", $1, get_c_type($3->type));
                  add_global_symbol($1, $3);
-                 $$->name = string_toupper(strdup($1));
-                 $$->type = $3;
+                 check_const($3, $5);
+                 print_const($1, $3, $5);
              }
            ;
 
@@ -557,7 +552,7 @@ char *check_record_member(char *record, char *member)
         yyerror("identifier %s is not of record type", record);
     if (! get_field_type(member, type->u.record))
         yyerror("element %s does not have field %s", record, member);
-    asprintf(&result, "%s.%s", string_toupper(record), string_toupper(member));
+    asprintf(&result, "%s.%s", record, member);
     return result;
 }
 
@@ -604,7 +599,7 @@ Type *check_and_print_array_index(char *symbol, List *index)
     type = get_var_type(symbol);
     if (! type)
         yyerror("symbol %s not found", symbol);
-    printf("%s", string_toupper(symbol));
+    print_toupper(symbol);
     return check_and_print_type_array_index(type, index, symbol);
 }
 
@@ -642,12 +637,17 @@ void clear_list(List **listptr)
 
 void print_toupper(char *string)
 {
+    int i;
     char *upper;
     if (! string)
         return;
     upper = strdup(string);
-    while (*string)
-        upper[i] = toupper(*(string++));
+    i = 0;
+    while (string[i])
+    {
+        upper[i] = toupper(string[i]);
+        i++;
+    }
     printf("%s", upper);
     free(upper);
 }
@@ -968,22 +968,21 @@ void print_type(Type *type)
     }
 }
 
-void print_const(SymbolEntry *symbol, ConstExpr *expr)
+void print_const(char *symbol, Type *type, ConstExpr *expr)
 {
-    print_type(symbol->type);
-    if (symbol->type->type != RECORD)
+    print_type(type);
+    if (type->type != RECORD)
     {
-        printf(" %s = %s;\n", symbol->name, expr->value.string);
-        free(symbol->name);
+        printf(" %s = %s;\n", symbol, expr->value.string);
         free(symbol);
     }
     else
     {
         int i;
         int printed = 0;
-        List *record = symbol->type->u.record;
+        List *record = type->u.record;
         List *record_val = expr->value.record;
-        printf(" %s = {", symbol->name);
+        printf(" %s = {", symbol);
         for (i = 0; i < record->count; i++)
         {
             int k;
@@ -1016,8 +1015,12 @@ void print_vars(VarList *vars)
         print_type(vars->type);
         putchar(' ');
         for (i = 0; i < vars->vars->count - 1; i++)
-            printf("%s, ", string_toupper((char *)vars->vars->elements[i]));
-        printf("%s;\n", string_toupper((char *)vars->vars->elements[i]));
+        {
+            print_toupper((char *)vars->vars->elements[i]);
+            printf(", ");
+        }
+        print_toupper((char *)vars->vars->elements[i]);
+        printf(";\n");
     }
     else
     {
@@ -1032,7 +1035,7 @@ void print_vars(VarList *vars)
         putchar(' ');
         for (i = 0; i < vars->vars->count - 1; i++)
         {
-            printf("%s", string_toupper((char *)vars->vars->elements[i]));
+            print_toupper((char *)vars->vars->elements[i]);
             btype = type;
             while (btype->type == ARRAY)
             {
@@ -1044,7 +1047,7 @@ void print_vars(VarList *vars)
             }
             printf(", ");
         }
-        printf("%s", string_toupper((char *)vars->vars->elements[i]));
+        print_toupper((char *)vars->vars->elements[i]);
         btype = type;
         while (btype->type == ARRAY)
         {
@@ -1093,8 +1096,10 @@ void print_funcall(char *funcname, List *arglist)
 
     for (i = 0; i < arglist->count; i++)
         if (((Argument *)arglist->elements[i])->varname)
-            printf(",%s%s", function == READ_FUNC ? "&" : "",
-                   string_toupper(((Argument *)arglist->elements[i])->varname));
+        {
+            printf(",%s", function == READ_FUNC ? "&" : "");
+            print_toupper(((Argument *)arglist->elements[i])->varname);
+        }
 
     printf(");\n");
 }
@@ -1128,10 +1133,10 @@ void add_global_symbol(char *name, Type *type)
     SymbolEntry *entry;
     if (get_var_type(name) != NULL)
     {
-        int i = 0;
-        printf("identifier %s ", name);
-        yyerror("redeclared");
+        printf("var %s of type %s\n", name, get_c_type(get_var_type(name)->type));
+        yyerror("identifier %s redeclared", name);
     }
+    printf("adding %s of type %s\n", name, get_c_type(type->type));
     entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = name;
     entry->type = type;
