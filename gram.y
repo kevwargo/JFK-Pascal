@@ -13,20 +13,20 @@
 
   enum BUILTIN_TYPE
   {
-      BYTE = 1,
-      SHORTINT = 2,
-      INTEGER = 3,
-      WORD = 4,
-      LONGINT = 5,
-      REAL = 6,
-      SINGLE = 7,
-      DOUBLE = 8,
-      EXTENDED = 9,
-      COMP = 10,
-      CHAR = 11,
-      RECORD = 12,
-      ARRAY = 13,
-      WRONG_TYPE = 14
+      BYTE,
+      SHORTINT,
+      INTEGER,
+      WORD,
+      LONGINT,
+      REAL,
+      SINGLE,
+      DOUBLE,
+      EXTENDED,
+      COMP,
+      CHAR,
+      RECORD,
+      ARRAY,
+      WRONG_TYPE
   };
   typedef enum BUILTIN_TYPE BUILTIN_TYPE;
 
@@ -128,6 +128,7 @@
   char *get_c_type(BUILTIN_TYPE type);
   void add_vars_to_globals(VarList *vars, Type *type);
   void add_global_symbol(char *name, Type *type);
+  char *string_toupper(char *string);
   void print_toupper(char *string);
   Type *get_var_type(char *name);
   Type *get_field_type(char *name, List *record);
@@ -146,6 +147,7 @@
   Type *set_array_subtype(Type **arrayptr, Type *subtype);
   void set_low_array_bound(Type **arrayptr, char *value);
   void set_high_array_bound(Type **arrayptr, char *value);
+  char *make_expression(char *expr1, char *op, char *expr2);
 
   List GlobalSymbolTable;
 
@@ -164,9 +166,19 @@
     struct Array *array;
     int ival;
 }
+
+%left '*'
+%left '+'
+%left '-'
+%left '/'
+%left KWD_SHL
+%left KWD_SHR
+%left KWD_MOD
+%left KWD_DIV
+
 %token KWD_PROGRAM KWD_BEGIN KWD_END KWD_VAR KWD_CONST KWD_SHR KWD_SHL KWD_MOD KWD_DIV KWD_RECORD KWD_ARRAY KWD_OF WRITE_FUNC WRITELN_FUNC READ_FUNC
 %token <text> IDENT INT_CONST CHAR_CONST REAL_CONST STRING_LITERAL
-%type <text> expression var
+%type <text> expression var_expr
 %type <argument> arg var_arg
 %type <varlist> var_list var_decl field_decl
 %type <list> arg_list const_fields record_body array_index
@@ -189,15 +201,13 @@ array_index : INT_CONST { $$ = NULL; add_to_list(&($$), $1); }
             | array_index ',' CHAR_CONST { add_to_list(&($1), $3); $$ = $1; }
             ;
 
-array_element : IDENT '[' array_index ']' {
-                  $$ = check_and_print_array_index($1, $3);
-                }
+array_element : IDENT '[' array_index ']' { $$ = check_and_print_array_index($1, $3); }
               | array_element '[' array_index ']' {
                   $$ = check_and_print_type_array_index($1, $3, "SOME_TEMP_VAR");
                 }
               ;
 
-var : IDENT
+var_expr : IDENT
     | IDENT '.' IDENT { $$ = check_record_member($1, $3); free($1); free($3); }
     | array_element { $$ = strdup(""); }
     ;
@@ -207,17 +217,15 @@ statements :
            ;
 
 statement : func_call
-          | var ':' '=' expression ';' {
+          | var_expr ':' '=' expression ';' {
                     print_toupper($1);
-                    printf(" = ");
-                    print_toupper($4);
-                    printf(";\n");
+                    printf(" = %s;\n", $4);
                     free($1);
                     free($4);
                  }
           ;
 
-expression : var
+expression : var_expr { $$ = string_toupper(strdup($1)); }
            | INT_CONST
            | REAL_CONST
            | CHAR_CONST
@@ -228,60 +236,28 @@ expression : var
                      $$ = s;
                  }
            | expression '*' expression {
-               char *s = NULL;
-               asprintf(&s, "%s * %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "*", $3);
              }
            | expression '-' expression {
-               char *s = NULL;
-               asprintf(&s, "%s - %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "-", $3);
              }
            | expression '+' expression {
-               char *s = NULL;
-               asprintf(&s, "%s + %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "+", $3);
              }
            | expression '/' expression {
-               char *s = NULL;
-               asprintf(&s, "%s / %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "/", $3);
              }
            | expression KWD_SHL expression {
-               char *s = NULL;
-               asprintf(&s, "%s << %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "<<", $3);
              }
            | expression KWD_SHR expression {
-               char *s = NULL;
-               asprintf(&s, "%s >> %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, ">>", $3);
              }
            | expression KWD_MOD expression {
-               char *s = NULL;
-               asprintf(&s, "%s %% %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "%", $3);
              }
            | expression KWD_DIV expression {
-               char *s = NULL;
-               asprintf(&s, "%s / %s", $1, $3);
-               free($1);
-               free($3);
-               $$ = s;
+               $$ = make_expression($1, "/", $3);
              }
            ;
 
@@ -470,7 +446,6 @@ const_fields : const_field { $$ = NULL; add_to_list(&($$), $1); }
 
 const_decl : IDENT ':' type_rule '=' const_expr ';'
              {
-                 printf("global %s of type %s found\n", $1, get_c_type($3->type));
                  add_global_symbol($1, $3);
                  check_const($3, $5);
                  print_const($1, $3, $5);
@@ -635,19 +610,20 @@ void clear_list(List **listptr)
     *listptr = NULL;
 }
 
-void print_toupper(char *string)
+char *string_toupper(char *string)
 {
-    int i;
-    char *upper;
-    if (! string)
-        return;
-    upper = strdup(string);
-    i = 0;
+    int i = 0;
     while (string[i])
     {
-        upper[i] = toupper(string[i]);
+        string[i] = toupper(string[i]);
         i++;
     }
+    return string;
+}
+
+void print_toupper(char *string)
+{
+    char *upper = string_toupper(strdup(string));
     printf("%s", upper);
     free(upper);
 }
@@ -927,8 +903,7 @@ void check_record_const(Type *type, ConstExpr *expr)
         ConstField *field = (ConstField *)record_val->elements[i];
         if (! get_field_type(field->name, record_decl))
         {
-            printf("field %s ", field->name);
-            yyerror("was not found in record");
+            yyerror("field %s was not found in record", field->name);
         }
     }
 }
@@ -973,8 +948,9 @@ void print_const(char *symbol, Type *type, ConstExpr *expr)
     print_type(type);
     if (type->type != RECORD)
     {
-        printf(" %s = %s;\n", symbol, expr->value.string);
-        free(symbol);
+        printf(" ");
+        print_toupper(symbol);
+        printf(" = %s;\n", expr->value.string);
     }
     else
     {
@@ -982,7 +958,9 @@ void print_const(char *symbol, Type *type, ConstExpr *expr)
         int printed = 0;
         List *record = type->u.record;
         List *record_val = expr->value.record;
-        printf(" %s = {", symbol);
+        printf(" ");
+        print_toupper(symbol);
+        printf(" = {");
         for (i = 0; i < record->count; i++)
         {
             int k;
@@ -1131,12 +1109,11 @@ void add_global_symbol(char *name, Type *type)
 {
     List *globalSymbolTablePtr = &GlobalSymbolTable;
     SymbolEntry *entry;
-    if (get_var_type(name) != NULL)
+    Type *type_ = get_var_type(name);
+    if (type_ != NULL)
     {
-        printf("var %s of type %s\n", name, get_c_type(get_var_type(name)->type));
         yyerror("identifier %s redeclared", name);
     }
-    printf("adding %s of type %s\n", name, get_c_type(type->type));
     entry = (SymbolEntry *)malloc(sizeof(SymbolEntry));
     entry->name = name;
     entry->type = type;
@@ -1246,6 +1223,15 @@ void print_var_arg(char *name, VarOpt *vo, int if_scanf)
                 printf("f");
             break;
     }
+}
+
+char *make_expression(char *expr1, char *op, char *expr2)
+{
+    char *result;
+    asprintf(&result, "%s %s %s", expr1, op, expr2);
+    free(expr1);
+    free(expr2);
+    return result;
 }
 
 void yyerror(const char *fmt, ...)
