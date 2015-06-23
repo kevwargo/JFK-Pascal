@@ -194,7 +194,7 @@
 %type <type> type_rule array_decl array_bounds array_bounds_decl array_multi_bounds array_low_int_bound array_low_char_bound array_head
 %type <const_expr> const_expr
 %type <const_field> const_field
-%type <symbol> array_element
+%type <symbol> var_array
 %%
 
 /* START */
@@ -265,7 +265,8 @@ array_low_char_bound : CHAR_CONST '.' '.' { $$ = NULL; set_low_array_bound(&($$)
 
 array_low_int_bound : INT_CONST '.' '.' { $$ = NULL; set_low_array_bound(&($$), $1); }
                     | REAL_CONST '.' {
-                        if ($1[strlen($1) - 1] != '.') yyerror("syntax error in array declaration");
+                        if ($1[strlen($1) - 1] != '.')
+                            yyerror("syntax error in array declaration");
                         $$ = NULL;
                         set_low_array_bound(&($$), $1);
                       }
@@ -282,6 +283,8 @@ array_multi_bounds : { $$ = NULL; }
                    ;
 
 array_bounds_decl : '[' array_multi_bounds array_low_int_bound REAL_CONST ')' {
+                            if ($4[strlen($4) - 1] != '.')
+                                yyerror("syntax error in array declaration");
                             set_high_array_bound(&($3), $4);
                             $$ = set_array_subtype(&($2), $3);
                         }
@@ -468,7 +471,11 @@ var_arg : IDENT var_options
         ;
 
 var_options : { $$ = NULL; }
-            | ':' INT_CONST ':' INT_CONST { $$ = (VarOpt *)malloc(sizeof(VarOpt)); $$->len = $2; $$->precision = $4; }
+            | ':' INT_CONST ':' INT_CONST {
+                $$ = (VarOpt *)malloc(sizeof(VarOpt));
+                $$->len = $2;
+                $$->precision = $4;
+              }
             ;
 
 
@@ -476,7 +483,7 @@ var_options : { $$ = NULL; }
 
 var_expr : IDENT
     | IDENT '.' IDENT { $$ = check_record_member($1, $3); free($1); free($3); }
-    | array_element { $$ = strdup(""); free($1->name); free($1); }
+    | var_array { $$ = strdup(""); free($1->name); free($1); }
     ;
 
 array_index : INT_CONST { $$ = NULL; add_to_list(&($$), $1); }
@@ -485,13 +492,13 @@ array_index : INT_CONST { $$ = NULL; add_to_list(&($$), $1); }
             | array_index ',' CHAR_CONST { add_to_list(&($1), $3); $$ = $1; }
             ;
 
-array_element : IDENT '[' array_index ']' {
+var_array : IDENT '[' array_index ']' {
                                $$ = (SymbolEntry *)malloc(sizeof(SymbolEntry));
                                $$->type = check_and_print_array_index($1, $3);
                                $$->name = $1;
                                clear_list(&($3));
                            }
-              | array_element '[' array_index ']' {
+              | var_array '[' array_index ']' {
                   $$ = $1;
                   $$->type = check_and_print_type_array_index($1->type, $3, $1->name);
                   clear_list(&($3));
@@ -547,7 +554,10 @@ int int_in_bounds(char *value, long int low, long int high)
 {
     long int num = strtol(value, NULL, 10);
     if (errno == ERANGE)
+    {
+        errno = 0;
         return 0;
+    }
     if (num < low)
         return 0;
     if (num > high)
